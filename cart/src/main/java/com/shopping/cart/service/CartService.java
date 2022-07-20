@@ -2,11 +2,14 @@ package com.shopping.cart.service;
 
 import com.shopping.cart.dao.CartDao;
 import com.shopping.cart.exception.CartServiceException;
+import com.shopping.cart.exception.CheckOutException;
+import com.shopping.cart.exception.ProductServiceException;
 import com.shopping.cart.model.Cart;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -17,21 +20,34 @@ public class CartService {
     @Autowired
     CartDao cartDao;
 
+    @Autowired
+    ProductService productService;
+
     public void addToCart(Cart newCart){
-        //product api call check inventory, throw exception if needed
 
         List<Cart> cartList = cartDao.getCart(newCart.getUserId());
         Optional<Cart> cart = cartList.stream().filter
-                        (item -> item.getProductName().equalsIgnoreCase(newCart.getProductName())).findFirst();
+                        (item -> item.getProductId() == newCart.getProductId()).findFirst();
+        int productPrice = newCart.getProductPrice() * newCart.getProductQuantity();
         if(cart.isPresent()) {
             Cart item = cart.get();
-            item.setProductQuantity(item.getProductQuantity()+1);
-            item.setTotalProductPrice(item.getTotalProductPrice()+newCart.getTotalProductPrice());
-            cartDao.addToCart(item);
+            item.setProductQuantity(item.getProductQuantity()+newCart.getProductQuantity());
+            item.setTotalProductPrice(item.getTotalProductPrice()+ productPrice);
+            addItemToCart(item);
+
         } else{
-            cartDao.addToCart(newCart);
+            newCart.setTotalProductPrice(productPrice);
+            addItemToCart(newCart);
         }
     }
+
+    private void addItemToCart(Cart item) {
+        if(!productService.validProduct(item)){
+            throw new ProductServiceException("Product is currently unavailable", HttpStatus.NOT_ACCEPTABLE);
+        }
+        cartDao.addToCart(item);
+    }
+
     public List<Cart> getCart(int userId){
        return cartDao.getCart(userId);
     }
@@ -53,9 +69,8 @@ public class CartService {
 
     public void decreaseItem(int cartId) {
         Cart item = cartDao.getCartItem(cartId);
-        int productPrice = item.getTotalProductPrice()/item.getProductQuantity();
         item.setProductQuantity(item.getProductQuantity()-1);
-        item.setTotalProductPrice(item.getTotalProductPrice()-productPrice);
+        item.setTotalProductPrice(item.getTotalProductPrice()-item.getProductPrice());
         cartDao.addToCart(item);
     }
 
@@ -67,8 +82,20 @@ public class CartService {
     }
 
     public void checkoutCart(int userId) {
-        //check product availability
-        deleteCart(userId);
-        //update product db
+        List<Cart> items = getCart(userId);
+        List<Cart> unavailableItems = new ArrayList<>();
+        items.stream().forEach(item -> {
+            if(!productService.validProduct(item)){
+                unavailableItems.add(item);
+            }
+        });
+        if(unavailableItems.isEmpty()){
+            deleteCart(userId);
+            //update product db
+        }
+        else {
+            throw new CheckOutException("Few items are currently unavailable. Please review the cart", HttpStatus.INTERNAL_SERVER_ERROR,
+                    unavailableItems);
+        }
     }
 }
